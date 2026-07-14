@@ -19,7 +19,7 @@ bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 DATA_FILE = "shop_data.json"
 
-# Kiểm tra dữ liệu bộ nhớ shop
+# Kiểm tra và khởi tạo cơ sở dữ liệu file shop_data.json
 if not os.path.exists(DATA_FILE):
     initial_data = {
         "users": {},
@@ -31,7 +31,10 @@ if not os.path.exists(DATA_FILE):
 def doc_data():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            if "users" not in data: data["users"] = {}
+            if "accounts" not in data: data["accounts"] = []
+            return data
     except:
         return {"users": {}, "accounts": []}
 
@@ -63,19 +66,28 @@ def abbank_webhook():
         so_tien = int(req_data.get("amount", 0))
         
         if "NAP" in noi_dung and so_tien > 0:
-            khach_id = noi_dung.replace("NAP", "")[:10]
+            # Loại bỏ chữ NAP ở đầu chuỗi nội dung chuyển khoản
+            chuoi_sau_nap = noi_dung.replace("NAP", "").strip()
+            # FIX LỖI: Cắt bỏ chính xác 6 ký tự mã hóa đơn cuối cùng để thu về ID thật (bất kể ID dài 9, 10 hay 11 số)
+            khach_id = chuoi_sau_nap[:-6]
             
             if khach_id.isdigit():
                 data = doc_data()
-                if khach_id not in data["users"] or isinstance(data["users"][khach_id], int):
+                khach_id = str(khach_id)
+                
+                if khach_id not in data["users"] or not isinstance(data["users"][khach_id], dict):
                     data["users"][khach_id] = {"balance": 0, "total_nap": 0, "total_tieu": 0, "don_mua": 0}
                 
-                # CẬP NHẬT TIỀN THẬT 100% CHO KHÁCH HÀNG KHI CHUYỂN KHOẢN THÀNH CÔNG
+                # CẬP NHẬT TIỀN THẬT VÀO VÍ CỦA KHÁCH HÀNG
                 data["users"][khach_id]["balance"] += so_tien
                 data["users"][khach_id]["total_nap"] += so_tien
                 ghi_data(data)
                 
-                bot.send_message(khach_id, f"🎉 *HỆ THỐNG CỘNG TIỀN THÀNH CÔNG!*\n Tài khoản của bạn đã được cộng tự động *+{so_tien:,} VNĐ*.", parse_mode="Markdown")
+                # Gửi thông báo tự động cho khách hàng và Admin
+                try:
+                    bot.send_message(khach_id, f"🎉 *HỆ THỐNG CỘNG TIỀN THÀNH CÔNG!*\n Tài khoản của bạn đã được cộng tự động *+{so_tien:,} VNĐ*.", parse_mode="Markdown")
+                except:
+                    pass
                 bot.send_message(ADMIN_ID, f"💰 Admin ơi! Khách ID `{khach_id}` vừa nạp thành công *{so_tien:,}đ* qua ABBank.", parse_mode="Markdown")
                 return jsonify({"status": "success"}), 200
     except Exception as e:
@@ -93,7 +105,6 @@ def xử_lý_thêm_acc(message):
         chuoi = message.text.split("|")
         gia = int(chuoi[0].strip())
         ten_sp = chuoi[1].strip()
-        
         thong_tin = "|".join(chuoi[2:]).strip()
         
         data = doc_data()
@@ -112,12 +123,79 @@ def xử_lý_thêm_acc(message):
     except Exception as e:
         bot.reply_to(message, "❌ Lỗi định dạng! Vui lòng nhập đúng mẫu: `Giá | Tên kho sản phẩm | Thông tin nick`")
 
+# Hàm xử lý Admin cộng tiền thủ công cho khách
+def xu_ly_admin_plus_money(message):
+    if message.from_user.id != ADMIN_ID: return
+    try:
+        if "|" not in message.text:
+            bot.reply_to(message, "❌ Sai định dạng! Vui lòng nhập: `ID Khách | Số tiền cộng`\nVí dụ: `6074595642 | 100000`")
+            return
+        parts = message.text.split("|")
+        khach_id = parts[0].strip()
+        so_tien = int(parts[1].strip())
+        
+        if so_tien <= 0:
+            bot.reply_to(message, "❌ Số tiền cộng phải lớn hơn 0!")
+            return
+            
+        data = doc_data()
+        khach_id = str(khach_id)
+        if khach_id not in data["users"] or not isinstance(data["users"][khach_id], dict):
+            data["users"][khach_id] = {"balance": 0, "total_nap": 0, "total_tieu": 0, "don_mua": 0}
+            
+        data["users"][khach_id]["balance"] += so_tien
+        data["users"][khach_id]["total_nap"] += so_tien
+        ghi_data(data)
+        
+        bot.reply_to(message, f"✅ Đã cộng thành công *+{so_tien:,}đ* cho khách hàng ID `{khach_id}`.")
+        try:
+            bot.send_message(khach_id, f"🎉 *THÔNG BÁO BIẾN ĐỘNG SỐ DƯ!*\n Tài khoản của bạn đã được hệ thống cộng tay *+{so_tien:,} VNĐ* từ Admin.", parse_mode="Markdown")
+        except:
+            pass
+    except Exception as e:
+        bot.reply_to(message, "❌ Đã xảy ra lỗi! Vui lòng kiểm tra lại ID khách hoặc định dạng số tiền nhập vào.")
+
+# Hàm xử lý Admin trừ tiền thủ công của khách
+def xu_ly_admin_minus_money(message):
+    if message.from_user.id != ADMIN_ID: return
+    try:
+        if "|" not in message.text:
+            bot.reply_to(message, "❌ Sai định dạng! Vui lòng nhập: `ID Khách | Số tiền trừ`\nVí dụ: `6074595642 | 50000`")
+            return
+        parts = message.text.split("|")
+        khach_id = parts[0].strip()
+        so_tien = int(parts[1].strip())
+        
+        if so_tien <= 0:
+            bot.reply_to(message, "❌ Số tiền trừ phải lớn hơn 0!")
+            return
+            
+        data = doc_data()
+        khach_id = str(khach_id)
+        if khach_id not in data["users"] or not isinstance(data["users"][khach_id], dict):
+            bot.reply_to(message, "❌ Không tìm thấy thông tin khách hàng này trên cơ sở dữ liệu shop!")
+            return
+            
+        data["users"][khach_id]["balance"] -= so_tien
+        if data["users"][khach_id]["balance"] < 0:
+            data["users"][khach_id]["balance"] = 0 # Đảm bảo không bị âm số dư
+            
+        ghi_data(data)
+        
+        bot.reply_to(message, f"✅ Đã trừ thành công *-{so_tien:,}đ* của khách hàng ID `{khach_id}`.")
+        try:
+            bot.send_message(khach_id, f"💸 *THÔNG BÁO BIẾN ĐỘNG SỐ DƯ!*\n Tài khoản của bạn đã bị trừ *-{so_tien:,} VNĐ* theo lệnh điều chỉnh của Admin.", parse_mode="Markdown")
+        except:
+            pass
+    except Exception as e:
+        bot.reply_to(message, "❌ Đã xảy ra lỗi! Vui lòng kiểm tra lại ID khách hoặc số tiền.")
+
 # ================= LỆNH KHỞI ĐỘNG /START =================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     u_id = str(message.from_user.id)
     data = doc_data()
-    if u_id not in data["users"] or isinstance(data["users"][u_id], int):
+    if u_id not in data["users"] or not isinstance(data["users"][u_id], dict):
         data["users"][u_id] = {"balance": 0, "total_nap": 0, "total_tieu": 0, "don_mua": 0}
         ghi_data(data)
         
@@ -142,11 +220,12 @@ def xu_ly_giao_dien(message):
     u_id = str(message.from_user.id)
     data = doc_data()
     
-    if u_id not in data["users"] or isinstance(data["users"][u_id], int):
+    if u_id not in data["users"] or not isinstance(data["users"][u_id], dict):
         data["users"][u_id] = {"balance": 0, "total_nap": 0, "total_tieu": 0, "don_mua": 0}
         ghi_data(data)
         
     user_info = data["users"][u_id]
+    is_admin = (message.from_user.id == ADMIN_ID)
     
     if message.from_user.username:
         ten_khach_hang = f"@{message.from_user.username}"
@@ -154,8 +233,9 @@ def xu_ly_giao_dien(message):
         ten_khach_hang = message.from_user.first_name if message.from_user.first_name else "Thành Viên"
 
     if message.text == "👤 Tài Khoản Của Tôi" or message.text == "👤 Tài Khoản":
-        if message.from_user.id == ADMIN_ID:
-            so_du_hien_thi = "999,999,999"
+        # HIỂN THỊ: Số dư của Admin sẽ giảm trừ dần từ mốc 999,999,999đ theo lượng acc đã mua test
+        if is_admin:
+            so_du_hien_thi = f"{999999999 - user_info.get('total_tieu', 0):,}"
             hang_hien_thi = "ADMIN TỐI THƯỢNG"
         else:
             so_du_hien_thi = f"{user_info.get('balance', 0):,}"
@@ -182,7 +262,6 @@ def xu_ly_giao_dien(message):
 
     elif message.text == "🛍️ Mua Key/Acc":
         markup = types.InlineKeyboardMarkup(row_width=1)
-        
         kho_hang = {}
         for acc in data["accounts"]:
             if acc["status"] == "ConHang":
@@ -204,13 +283,15 @@ def xu_ly_giao_dien(message):
             bot.send_message(message.chat.id, "❌ *Hiện tại kho hàng đã hết sạch sản phẩm!*")
 
     elif message.text == "🛠️ Admin Panel":
-        if message.from_user.id != ADMIN_ID: return
+        if not is_admin: return
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
             types.InlineKeyboardButton("➕ THÊM ACC", callback_data="admin_add_acc"),
-            types.InlineKeyboardButton("➖ XOÁ ACC", callback_data="admin_del_acc")
+            types.InlineKeyboardButton("➖ XOÁ ACC", callback_data="admin_del_acc"),
+            types.InlineKeyboardButton("💵 CỘNG TIỀN KHÁCH", callback_data="admin_plus_money"),
+            types.InlineKeyboardButton("💸 TRỪ TIỀN KHÁCH", callback_data="admin_minus_money")
         )
-        bot.send_message(message.chat.id, "🛠 *BẢNG ĐIỀU KHIỂN ADMIN QUẢN LÝ SHOP*", reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(message.chat.id, "🛠 *BẢNG ĐIỀU KHIỂN ADMIN QUẢN LÝ SHOP TỐI THƯỢNG*", reply_markup=markup, parse_mode="Markdown")
 
 def xu_ly_nhap_tien_nap(message):
     if message.text in ["🛍️ Mua Key/Acc", "💳 Nạp Tiền Shop", "👤 Tài Khoản Của Tôi", "🛠️ Admin Panel"]:
@@ -251,11 +332,11 @@ def xu_ly_nhap_tien_nap(message):
 def callback_xu_ly(call):
     u_id = str(call.from_user.id)
     data = doc_data()
+    is_admin = (call.from_user.id == ADMIN_ID)
 
     if call.data.startswith("open_kho_"):
         ten_kho = call.data.replace("open_kho_", "")
         markup = types.InlineKeyboardMarkup(row_width=1)
-        
         co_acc = False
         for acc in data["accounts"]:
             if acc["name"] == ten_kho and acc["status"] == "ConHang":
@@ -263,7 +344,6 @@ def callback_xu_ly(call):
                 markup.add(types.InlineKeyboardButton(f"🎟️ Mã sản phẩm #{acc['id']} — Giá: {acc['price']:,}đ", callback_data=f"view_sp_{acc['id']}"))
                 
         markup.add(types.InlineKeyboardButton("⬅️ Quay lại danh mục chính", callback_data="back_to_list"))
-        
         if co_acc:
             bot.edit_message_text(f"📦 *DANH SÁCH SẢN PHẨM TRONG KHO:* `{ten_kho}`\n━━━━━━━━━━━━━━━━━━━━━━━\n👉 Chọn một mã sản phẩm cụ thể để tiến hành xem thông tin và mua:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
         else:
@@ -315,32 +395,38 @@ def callback_xu_ly(call):
     elif call.data.startswith("confirm_buy_"):
         acc_id = int(call.data.split("_")[2])
         target_acc = next((acc for acc in data["accounts"] if acc["id"] == acc_id and acc["status"] == "ConHang"), None)
-        user_info = data["users"].get(u_id, {"balance": 0, "total_nap": 0, "total_tieu": 0, "don_mua": 0})
         
         if not target_acc:
             bot.answer_callback_query(call.id, "❌ Sản phẩm này đã bị người khác mua mất!", show_alert=True)
             return
+
+        if u_id not in data["users"] or not isinstance(data["users"][u_id], dict):
+            data["users"][u_id] = {"balance": 0, "total_nap": 0, "total_tieu": 0, "don_mua": 0}
             
-        # FIX FIX FIX LỖI SỐ DƯ CHO ADMIN TỐI THƯỢNG
-        is_admin_mua = (call.from_user.id == ADMIN_ID)
+        user_info = data["users"][u_id]
         
-        # Nếu không phải Admin và ví tiền thật không đủ mới chặn
-        if not is_admin_mua and user_info["balance"] < target_acc["price"]:
-            bot.answer_callback_query(call.id, "❌ Số dư của bạn không đủ! Vui lòng nạp tiền.", show_alert=True)
+        # XÁC ĐỊNH SỐ DƯ HIỆN TẠI ĐỂ KIỂM TRA ĐIỀU KIỆN MUA
+        if is_admin:
+            vi_tien_hien_tai = 999999999 - user_info.get("total_tieu", 0)
         else:
-            # Nếu là khách mua thực tế -> trừ tiền ví thật 100%
-            if not is_admin_mua:
-                data["users"][u_id]["balance"] -= target_acc["price"]
+            vi_tien_hien_tai = user_info.get("balance", 0)
+        
+        if vi_tien_hien_tai < target_acc["price"]:
+            bot.answer_callback_query(call.id, "❌ Số dư của bạn không đủ! Vui lòng nạp thêm tiền.", show_alert=True)
+        else:
+            # KIỂM TRA LUỒNG TRỪ SỐ DƯ
+            if is_admin:
+                # Nếu là Admin -> Mất tiền trừ dần từ mốc 999k triệu ảo, tăng tổng tiêu và đơn mua
                 data["users"][u_id]["total_tieu"] += target_acc["price"]
                 data["users"][u_id]["don_mua"] += 1
             else:
-                # Nếu Admin mua test -> lưu log riêng cho tài khoản admin trong database không trừ tiền ảo
-                if u_id not in data["users"] or isinstance(data["users"][u_id], int):
-                    data["users"][u_id] = {"balance": 0, "total_nap": 0, "total_tieu": 0, "don_mua": 0}
+                # Nếu là khách hàng -> Trừ trực tiếp số dư ví thật 100%
+                data["users"][u_id]["balance"] -= target_acc["price"]
+                data["users"][u_id]["total_tieu"] += target_acc["price"]
                 data["users"][u_id]["don_mua"] += 1
             
             target_acc["status"] = "DaBan"
-            ghi_data(data)
+            ghi_data(data) # Lưu lại ngay lập tức
             
             van_ban_tc = (
                 f"🎉 *XÁC NHẬN MUA THÀNH CÔNG*\n"
@@ -358,13 +444,13 @@ def callback_xu_ly(call):
 
     # --- ĐIỀU HƯỚNG SỰ KIỆN QUẢN TRỊ ADMIN ---
     elif call.data == "admin_add_acc":
-        if call.from_user.id != ADMIN_ID: return
-        msg = bot.send_message(call.message.chat.id, "📝 Nhập theo mẫu:\n`Giá | Tên kho hàng trùng nhau | Thông tin nick`\n\nVí dụ: `25000 | ACC FF CỰC NGON | TK: dangvip1 | MK: 12345`\n*(Gõ đúng tên kho giống hệt nhau để chúng tự gom vào 1 mục)*", parse_mode="Markdown")
+        if not is_admin: return
+        msg = bot.send_message(call.message.chat.id, "📝 Nhập theo mẫu:\n`Giá | Tên kho hàng trùng nhau | Thông tin nick`\n\nVí dụ: `25000 | ACC FF CỰC NGON | TK: dangvip1 | MK: 12345`")
         bot.register_next_step_handler(msg, xử_lý_thêm_acc)
         bot.answer_callback_query(call.id)
 
     elif call.data == "admin_del_acc":
-        if call.from_user.id != ADMIN_ID: return
+        if not is_admin: return
         markup = types.InlineKeyboardMarkup(row_width=1)
         co_acc = False
         for acc in data["accounts"]:
@@ -378,13 +464,25 @@ def callback_xu_ly(call):
         bot.answer_callback_query(call.id)
 
     elif call.data.startswith("adm_delete_"):
-        if call.from_user.id != ADMIN_ID: return
+        if not is_admin: return
         acc_id = int(call.data.split("_")[2])
         data["accounts"] = [a for a in data["accounts"] if a["id"] != acc_id]
         ghi_data(data)
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
         except: pass
         bot.send_message(call.message.chat.id, f"🗑 Đã xóa hoàn toàn sản phẩm mã #{acc_id}.")
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "admin_plus_money":
+        if not is_admin: return
+        msg = bot.send_message(call.message.chat.id, "💵 *CỘNG TIỀN CHO KHÁCH HÀNG*\nNhập đúng định dạng: `ID Khách | Số tiền cộng`\n\nVí dụ: `6074595642 | 100000`", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, xu_ly_admin_plus_money)
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "admin_minus_money":
+        if not is_admin: return
+        msg = bot.send_message(call.message.chat.id, "💸 *TRỪ TIỀN CỦA KHÁCH HÀNG*\nNhập đúng định dạng: `ID Khách | Số tiền trừ`\n\nVí dụ: `6074595642 | 50000`", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, xu_ly_admin_minus_money)
         bot.answer_callback_query(call.id)
 
 def run_api():
