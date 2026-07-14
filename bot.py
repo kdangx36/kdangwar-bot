@@ -2,12 +2,12 @@ import os
 import json
 import random
 import logging
+import re
 from threading import Thread, Lock
 from flask import Flask, request, jsonify
 import telebot
 from telebot import types
 
-# Cấu hình logging để giám sát hệ thống chuyên nghiệp
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -25,19 +25,29 @@ TEN_CHU_TK = "NGUYEN KHOA DANG"
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 DATA_FILE = "shop_data.json"
-file_lock = Lock()  # Khóa luồng bảo vệ dữ liệu an toàn tuyệt đối
+file_lock = Lock()
 
 # ================= CORE DATA MANAGEMENT =================
 def init_db():
-    """Khởi tạo cơ sở dữ liệu nếu chưa tồn tại"""
     if not os.path.exists(DATA_FILE):
         initial_data = {"users": {}, "accounts": []}
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(initial_data, f, ensure_ascii=False, indent=4)
-        logging.info("Khởi tạo file dữ liệu shop_data.json thành công.")
+
+def clean_money_value(val) -> int:
+    """Hàm cốt lõi: Làm sạch mọi loại chuỗi số (xóa dấu phẩy, khoảng trắng) trước khi ép kiểu int"""
+    if val is None:
+        return 0
+    if isinstance(val, (int, float)):
+        return int(val)
+    try:
+        # Lọc sạch chỉ giữ lại các ký tự số
+        cleaned = re.sub(r'[^\d]', '', str(val))
+        return int(cleaned) if cleaned else 0
+    except Exception:
+        return 0
 
 def read_db() -> dict:
-    """Đọc dữ liệu từ file JSON an toàn với Lock"""
     with file_lock:
         try:
             if not os.path.exists(DATA_FILE):
@@ -47,23 +57,19 @@ def read_db() -> dict:
                 data.setdefault("users", {})
                 data.setdefault("accounts", [])
                 return data
-        except Exception as e:
-            logging.error(f"Lỗi đọc file DB: {e}")
+        except Exception:
             return {"users": {}, "accounts": []}
 
 def write_db(data: dict) -> bool:
-    """Ghi dữ liệu vào file JSON an toàn với Lock"""
     with file_lock:
         try:
             with open(DATA_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
             return True
-        except Exception as e:
-            logging.error(f"Lỗi ghi file DB: {e}")
+        except Exception:
             return False
 
 def sync_user_data(data: dict, user_id: str) -> dict:
-    """Đồng bộ và ép kiểu dữ liệu người dùng (Admin có số dư khởi tạo = 0)"""
     user_id = str(user_id)
     if user_id not in data["users"]:
         data["users"][user_id] = {
@@ -73,16 +79,15 @@ def sync_user_data(data: dict, user_id: str) -> dict:
             "don_mua": 0
         }
     else:
-        # Ép kiểu int an toàn để triệt tiêu lỗi không trừ tiền
-        data["users"][user_id]["balance"] = int(data["users"][user_id].get("balance", 0))
-        data["users"][user_id]["total_nap"] = int(data["users"][user_id].get("total_nap", 0))
-        data["users"][user_id]["total_tieu"] = int(data["users"][user_id].get("total_tieu", 0))
+        # Ép kiểu an toàn tuyệt đối qua hàm lọc chuỗi clean_money_value
+        data["users"][user_id]["balance"] = clean_money_value(data["users"][user_id].get("balance", 0))
+        data["users"][user_id]["total_nap"] = clean_money_value(data["users"][user_id].get("total_nap", 0))
+        data["users"][user_id]["total_tieu"] = clean_money_value(data["users"][user_id].get("total_tieu", 0))
         data["users"][user_id]["don_mua"] = int(data["users"][user_id].get("don_mua", 0))
     return data
 
 # ================= KEYBOARD UI BUILDERS =================
 def build_main_keyboard():
-    """Tạo bàn phím tương tác chính"""
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add(
         types.KeyboardButton("🛍️ Mua Key/Acc"),
@@ -105,31 +110,28 @@ def abbank_callback():
             return jsonify({"status": "invalid_payload"}), 400
             
         description = req_data.get("description", "").upper() 
-        amount = int(req_data.get("amount", 0))
+        amount = clean_money_value(req_data.get("amount", 0))
         
         if "NAP" in description and amount > 0:
             raw_content = description.replace("NAP", "").strip()
-            client_id = raw_content[:-6]  # Loại bỏ mã bill ngẫu nhiên
+            client_id = raw_content[:-6]
             
             if client_id.isdigit():
                 client_id = str(client_id)
                 db = read_db()
                 db = sync_user_data(db, client_id)
                 
-                # Cập nhật số dư
                 db["users"][client_id]["balance"] += amount
                 db["users"][client_id]["total_nap"] += amount
                 
                 if write_db(db):
-                    logging.info(f"Nạp tiền tự động thành công cho Client ID: {client_id} (+{amount:,}đ)")
                     try:
                         bot.send_message(
                             client_id, 
                             f"🎉 *HỆ THỐNG CỘNG TIỀN THÀNH CÔNG!*\n━━━━━━━━━━━━━━━━━━━━━━━\n💰 Tài khoản của bạn đã được cộng tự động *+{amount:,} VNĐ* qua cổng ABBank VIP.", 
                             parse_mode="Markdown"
                         )
-                    except Exception as e:
-                        logging.warning(f"Không thể gửi thông báo tới khách {client_id}: {e}")
+                    except Exception: pass
                         
                     try:
                         bot.send_message(
@@ -137,12 +139,10 @@ def abbank_callback():
                             f"💰 *THÔNG BÁO BIẾN ĐỘNG QUỸ SHOP*\n━━━━━━━━━━━━━━━━━━━━━━━\n👤 Khách hàng ID `{client_id}` vừa nạp thành công *{amount:,}đ* qua hệ thống Gateway.", 
                             parse_mode="Markdown"
                         )
-                    except Exception as e:
-                        logging.warning(f"Không thể gửi thông báo tới Admin: {e}")
+                    except Exception: pass
                         
                     return jsonify({"status": "success"}), 200
-    except Exception as e:
-        logging.error(f"Lỗi hệ thống Webhook API: {e}")
+    except Exception: pass
     return jsonify({"status": "error"}), 400
 
 # ================= ADMIN ACTIONS =================
@@ -154,7 +154,7 @@ def process_admin_add_product(message):
             return
             
         parts = message.text.split("|")
-        price = int(parts[0].strip())
+        price = clean_money_value(parts[0].strip())
         name = parts[1].strip()
         info = "|".join(parts[2:]).strip()
         
@@ -172,14 +172,14 @@ def process_admin_add_product(message):
         write_db(db)
         bot.reply_to(message, f"✅ *THÊM SẢN PHẨM THÀNH CÔNG!*\n━━━━━━━━━━━━━━━━━━━━━━━\n📦 **Loại kho:** {name}\n🆔 **Mã số:** #{next_id}\n💰 **Định giá:** {price:,} VNĐ", parse_mode="Markdown")
     except Exception as e:
-        bot.reply_to(message, f"❌ *Thao tác thất bại!* Kiểm tra định dạng số tiền. Chi tiết: {e}", parse_mode="Markdown")
+        bot.reply_to(message, f"❌ *Thao tác thất bại!* Chi tiết: {e}", parse_mode="Markdown")
 
 def process_admin_deposit(message):
     if message.from_user.id != ADMIN_ID: return
     try:
         parts = message.text.split("|")
         target_id = str(parts[0].strip())
-        amount = int(parts[1].strip())
+        amount = clean_money_value(parts[1].strip())
         reason = parts[2].strip() if len(parts) > 2 else "Được bổ sung số dư bởi Ban quản trị"
         
         if amount <= 0:
@@ -202,14 +202,14 @@ def process_admin_deposit(message):
             )
         except: pass
     except Exception:
-        bot.reply_to(message, "❌ Lỗi thực thi! Sai định dạng đầu vào. Mẫu: `ID | Số tiền | Ghi chú`")
+        bot.reply_to(message, "❌ Lỗi thực thi! Mẫu: `ID | Số tiền | Ghi chú`")
 
 def process_admin_withdraw(message):
     if message.from_user.id != ADMIN_ID: return
     try:
         parts = message.text.split("|")
         target_id = str(parts[0].strip())
-        amount = int(parts[1].strip())
+        amount = clean_money_value(parts[1].strip())
         reason = parts[2].strip() if len(parts) > 2 else "Bị khấu trừ tài khoản bởi Admin"
         
         if amount <= 0:
@@ -235,38 +235,26 @@ def process_admin_withdraw(message):
             )
         except: pass
     except Exception:
-        bot.reply_to(message, "❌ Lỗi thực thi! Sai định dạng đầu vào. Mẫu: `ID | Số tiền | Ghi chú`")
+        bot.reply_to(message, "❌ Lỗi thực thi! Mẫu: `ID | Số tiền | Ghi chú`")
 
 def process_admin_broadcast(message):
     if message.from_user.id != ADMIN_ID: return
     content = message.text.strip()
-    if not content:
-        bot.reply_to(message, "❌ Nội dung phát sóng không được để trống.")
-        return
+    if not content: return
         
     db = read_db()
     user_list = db.get("users", {})
-    
     progress_msg = bot.reply_to(message, f"⏳ Hệ thống đang gửi thông báo tới {len(user_list)} người dùng...")
     success, fail = 0, 0
     
     for uid in user_list:
         try:
-            bot.send_message(
-                uid, 
-                f"📢 *THÔNG BÁO TOÀN HỆ THỐNG*\n━━━━━━━━━━━━━━━━━━━━━━━\n\n{content}\n\n━━━━━━━━━━━━━━━━━━━━━━━", 
-                parse_mode="Markdown"
-            )
+            bot.send_message(uid, f"📢 *THÔNG BÁO TOÀN HỆ THỐNG*\n━━━━━━━━━━━━━━━━━━━━━━━\n\n{content}\n\n━━━━━━━━━━━━━━━━━━━━━━━", parse_mode="Markdown")
             success += 1
         except:
             fail += 1
             
-    bot.edit_message_text(
-        f"✅ *KẾT QUẢ PHÁT THÔNG BÁO:*\n🚀 Thành công: {success}\n❌ Thất bại (Chặn bot): {fail}", 
-        message.chat.id, 
-        progress_msg.message_id, 
-        parse_mode="Markdown"
-    )
+    bot.edit_message_text(f"✅ *KẾT QUẢ PHÁT THÔNG BÁO:*\n🚀 Thành công: {success}\n❌ Thất bại: {fail}", message.chat.id, progress_msg.message_id, parse_mode="Markdown")
 
 # ================= TELEGRAM HANDLERS =================
 @bot.message_handler(commands=['start'])
@@ -281,7 +269,7 @@ def handle_start_command(message):
         f"👑 *HỆ THỐNG SHOP KDANGX VIP* 👑\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"👋 Xin chào *{username}*!\n"
-        f"🔥 Nơi giao dịch và phân phối Acc/Key Free Fire hoàn toàn tự động, uy tín 24/7.\n"
+        f"🔥 Nơi giao dịch và phân phối Acc/Key hoàn hoàn tự động, uy tín 24/7.\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"👇 Vui lòng sử dụng các phím điều hướng bên dưới:"
     )
@@ -300,6 +288,11 @@ def handle_text_interface(message):
 
     if message.text in ["👤 Tài Khoản Của Tôi", "👤 Tài Khoản"]:
         role = "ADMIN TỐI THƯỢNG" if is_admin else "USER"
+        # Đảm bảo hiển thị số dư sạch định dạng số nguyên
+        current_bal = clean_money_value(user_info['balance'])
+        total_t = clean_money_value(user_info['total_tieu'])
+        total_n = clean_money_value(user_info['total_nap'])
+        
         profile_text = (
             f"👤 *THÔNG TIN TÀI KHOẢN NGƯỜI DÙNG*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -307,16 +300,16 @@ def handle_text_interface(message):
             f"👤 **Tên hiển thị:** {username}\n"
             f"⭐ **Hạng cấp tài khoản:** {role}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 **Số dư ví hiện tại:** {user_info['balance']:,}đ\n"
-            f"💸 **Tổng chi tiêu:** {user_info['total_tieu']:,}đ\n"
-            f"💳 **Tổng tiền đã nạp:** {user_info['total_nap']:,}đ\n"
+            f"💰 **Số dư ví hiện tại:** {current_bal:,}đ\n"
+            f"💸 **Tổng chi tiêu:** {total_t:,}đ\n"
+            f"💳 **Tổng tiền đã nạp:** {total_n:,}đ\n"
             f"🛒 **Đơn hàng đã mua:** {user_info['don_mua']}\n\n"
             f"🆘 **Liên hệ hỗ trợ:** @kdangx"
         )
         bot.send_message(message.chat.id, profile_text, parse_mode="Markdown")
 
     elif message.text in ["💳 Nạp Tiền Shop", "💳 Nạp Tiền"]:
-        msg = bot.send_message(message.chat.id, "💳 *CỔNG NẠP TIỀN TỰ ĐỘNG VNPAY/VIETQR*\nVui lòng nhập số tiền bạn muốn nạp vào shop (Ví dụ: `50000`):", parse_mode="Markdown")
+        msg = bot.send_message(message.chat.id, "💳 *CỔNG NẠP TIỀN TỰ ĐỘNG*\nVui lòng nhập số tiền bạn muốn nạp vào shop (Ví dụ: `50000`):", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_deposit_input)
 
     elif message.text == "🛍️ Mua Key/Acc":
@@ -331,12 +324,11 @@ def handle_text_interface(message):
                 markup.add(types.InlineKeyboardButton(f"📁 {category} • [Số lượng: {count}]", callback_data=f"open_cat_{category}"))
             bot.send_message(message.chat.id, "🛍️ *DANH MỤC SẢN PHẨM ĐANG SẴN HÀNG*\nVui lòng chọn loại sản phẩm bạn cần:", reply_markup=markup, parse_mode="Markdown")
         else:
-            bot.send_message(message.chat.id, "❌ *Hiện tại kho hàng của hệ thống đang tạm hết sản phẩm!* Vui lòng quay lại sau.")
+            bot.send_message(message.chat.id, "❌ *Hiện tại kho hàng của hệ thống đang tạm hết sản phẩm!*")
 
     elif message.text == "🛠️ Admin Panel":
-        # Chặn khách hàng bấm trực tiếp vào Admin Panel từ bàn phím Reply
         if not is_admin:
-            bot.reply_to(message, "❌ *Quyền truy cập bị từ chối!*\nKhu vực chỉ dành riêng cho Admin tối thượng của Shop.", parse_mode="Markdown")
+            bot.reply_to(message, "❌ *Quyền truy cập bị từ chối!*", parse_mode="Markdown")
             return
             
         markup = types.InlineKeyboardMarkup(row_width=2)
@@ -355,9 +347,9 @@ def process_deposit_input(message):
         handle_text_interface(message)
         return
     try:
-        amount = int(message.text.strip())
+        amount = clean_money_value(message.text.strip())
         if amount < 1000:
-            bot.reply_to(message, "❌ Số tiền nạp tối thiểu được cấu hình là 1.000 VNĐ.")
+            bot.reply_to(message, "❌ Số tiền nạp tối thiểu là 1.000 VNĐ.")
             return
             
         uid = str(message.from_user.id)
@@ -369,18 +361,18 @@ def process_deposit_input(message):
         caption = (
             f"🏦 *THÔNG TIN GIAO DỊCH CHUYỂN KHOẢN*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🏛️ **Ngân hàng:** ABBank (Ngân Hàng An Bình)\n"
+            f"🏛️ **Ngân hàng:** ABBank\n"
             f"💳 **Số tài khoản:** `{SO_TAI_KHOAN}`\n"
             f"👤 **Chủ tài khoản:** {TEN_CHU_TK}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"💰 **Số tiền cần chuyển:** {amount:,}đ\n"
             f"📝 **Nội dung chuyển tiền:** `{invoice_info}`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚠️ **Lưu ý quan trọng:** Quét QR hoặc nhập chuẩn xác 100% nội dung để hệ thống Auto nạp tiền sau 1-2 phút."
+            f"⚠️ **Lưu ý quan trọng:** Nhập chuẩn xác 100% nội dung để hệ thống Auto nạp tiền."
         )
         bot.send_photo(message.chat.id, photo=qr_url, caption=caption, parse_mode="Markdown")
     except Exception:
-        bot.reply_to(message, "❌ Đầu vào không hợp lệ. Vui lòng điền số nguyên đại diện cho mệnh giá.")
+        bot.reply_to(message, "❌ Đầu vào không hợp lệ.")
 
 # ================= CALLBACK INTERACTION RESPONSES =================
 @bot.callback_query_handler(func=lambda call: True)
@@ -397,27 +389,29 @@ def handle_callbacks(call):
         for acc in db["accounts"]:
             if acc["name"] == cat_name and acc["status"] == "ConHang":
                 has_items = True
-                markup.add(types.InlineKeyboardButton(f"🎟️ Mã SP #{acc['id']} — Giá: {acc['price']:,}đ", callback_data=f"target_sp_{acc['id']}"))
+                price_val = clean_money_value(acc['price'])
+                markup.add(types.InlineKeyboardButton(f"🎟️ Mã SP #{acc['id']} — Giá: {price_val:,}đ", callback_data=f"target_sp_{acc['id']}"))
                 
         markup.add(types.InlineKeyboardButton("⬅️ Quay lại danh mục chính", callback_data="nav_home"))
         if has_items:
-            bot.edit_message_text(f"📦 *KHO SẢN PHẨM ĐANG CHỨA:* `{cat_name}`\n━━━━━━━━━━━━━━━━━━━━━━━\nVui lòng lựa chọn một mã số sản phẩm để xem chi tiết cấu trúc tài khoản:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
+            bot.edit_message_text(f"📦 *KHO SẢN PHẨM ĐANG CHỨA:* `{cat_name}`\n━━━━━━━━━━━━━━━━━━━━━━━\nVui lòng lựa chọn một mã số sản phẩm để xem chi tiết:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
         else:
-            bot.answer_callback_query(call.id, "❌ Rất tiếc, phân mục này vừa bị mua sạch hàng!", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Rất tiếc, phân mục này vừa hết hàng!", show_alert=True)
 
     elif call.data.startswith("target_sp_"):
         acc_id = int(call.data.split("_")[2])
         product = next((acc for acc in db["accounts"] if acc["id"] == acc_id), None)
         
         if product:
+            price_val = clean_money_value(product['price'])
             detail_text = (
                 f"📦 *THÔNG TIN SẢN PHẨM CHI TIẾT*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🆔 **Mã Số:** #{product['id']}\n"
                 f"🏷️ **Loại hàng:** {product['name']}\n"
-                f"💰 **Đơn giá thanh toán:** {product['price']:,}đ\n"
+                f"💰 **Đơn giá thanh toán:** {price_val:,}đ\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"⚡ Nhấp nút mua phía dưới, tài khoản sẽ được bóc tách hiển thị ngay lập tức."
+                f"⚡ Nhấp nút mua phía dưới để tiến hành thanh toán tự động."
             )
             markup = types.InlineKeyboardMarkup(row_width=1)
             markup.add(
@@ -442,7 +436,6 @@ def handle_callbacks(call):
     elif call.data.startswith("commit_checkout_"):
         acc_id = int(call.data.split("_")[2])
         
-        # Đọc dữ liệu mới nhất ngay tại thời điểm thanh toán để chống lỗi trùng lặp dữ liệu
         db = read_db()
         product = next((acc for acc in db["accounts"] if acc["id"] == acc_id and acc["status"] == "ConHang"), None)
         
@@ -451,13 +444,15 @@ def handle_callbacks(call):
             return
 
         db = sync_user_data(db, uid_click)
-        wallet_balance = int(db["users"][uid_click]["balance"])
-        product_price = int(product["price"])
+        
+        # ÉP KIỂU SẠCH SẼ ĐỂ CHỐNG BUG SO SÁNH 25K < 25K
+        wallet_balance = clean_money_value(db["users"][uid_click]["balance"])
+        product_price = clean_money_value(product["price"])
         
         if wallet_balance < product_price:
-            bot.answer_callback_query(call.id, "❌ Tài khoản của bạn không đủ điều kiện thanh toán! Vui lòng nạp thêm tiền.", show_alert=True)
+            bot.answer_callback_query(call.id, f"❌ Số dư của bạn không đủ điều kiện thanh toán! Hiện có: {wallet_balance:,}đ, Giá: {product_price:,}đ. Vui lòng nạp thêm tiền.", show_alert=True)
         else:
-            # THỰC THI PHÉP TRỪ TIỀN VÀ TRỪ TRỰC TIẾP TRÊN FILE CỨNG
+            # TRỪ TIỀN CHUẨN XÁC ĐỐI TƯỢNG SỐ NGUYÊN
             db["users"][uid_click]["balance"] = wallet_balance - product_price
             db["users"][uid_click]["total_tieu"] += product_price
             db["users"][uid_click]["don_mua"] += 1
@@ -478,7 +473,7 @@ def handle_callbacks(call):
                 bot.edit_message_text(success_text, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
                 bot.answer_callback_query(call.id, "✅ Giao dịch hoàn tất!")
             else:
-                bot.answer_callback_query(call.id, "❌ Lỗi hệ thống dữ liệu trục trặc, vui lòng thử lại.", show_alert=True)
+                bot.answer_callback_query(call.id, "❌ Lỗi hệ thống ghi dữ liệu trục trặc.", show_alert=True)
 
     # --- ADMIN INLINE ROUTER ---
     elif call.data == "adm_add":
@@ -495,7 +490,7 @@ def handle_callbacks(call):
                 has_item = True
                 markup.add(types.InlineKeyboardButton(f"❌ Xóa vĩnh viễn #{acc['id']} - [{acc['name']}]", callback_data=f"kill_sp_{acc['id']}"))
         if has_item:
-            bot.send_message(call.message.chat.id, "🛠 Chọn mã sản phẩm cần thanh trừng khỏi Database:", reply_markup=markup)
+            bot.send_message(call.message.chat.id, "🛠 Chọn mã sản phẩm cần xoá:", reply_markup=markup)
         else:
             bot.send_message(call.message.chat.id, "📭 Hiện không có tài khoản sẵn có để xóa.")
             
@@ -506,16 +501,16 @@ def handle_callbacks(call):
         write_db(db)
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
         except: pass
-        bot.send_message(call.message.chat.id, f"🗑 Đã loại bỏ hoàn toàn mã sản phẩm #{target_id} khỏi hệ thống.")
+        bot.send_message(call.message.chat.id, f"🗑 Đã loại bỏ hoàn toàn mã sản phẩm #{target_id}.")
         
     elif call.data == "adm_plus":
         if not is_admin: return
-        msg = bot.send_message(call.message.chat.id, "💵 Cấu trúc cộng số dư khách hàng:\n`ID Khách | Số tiền cộng | Ghi chú lý do`")
+        msg = bot.send_message(call.message.chat.id, "💵 Cấu trúc cộng số dư:\n`ID Khách | Số tiền cộng | Ghi chú`")
         bot.register_next_step_handler(msg, process_admin_deposit)
         
     elif call.data == "adm_minus":
         if not is_admin: return
-        msg = bot.send_message(call.message.chat.id, "💸 Cấu trúc khấu trừ số dư khách hàng:\n`ID Khách | Số tiền trừ | Ghi chú lý do`")
+        msg = bot.send_message(call.message.chat.id, "💸 Cấu trúc khấu trừ số dư:\n`ID Khách | Số tiền trừ | Ghi chú`")
         bot.register_next_step_handler(msg, process_admin_withdraw)
         
     elif call.data == "adm_checkall":
@@ -525,15 +520,15 @@ def handle_callbacks(call):
         index_num = 1
         for u_id, info in users_list.items():
             if u_id == str(ADMIN_ID): continue
-            report_text += f"{index_num}. ID: `{u_id}` ➜ *{info.get('balance', 0):,}đ* (Tổng nạp: {info.get('total_nap', 0):,}đ)\n"
+            bal = clean_money_value(info.get('balance', 0))
+            t_nap = clean_money_value(info.get('total_nap', 0))
+            report_text += f"{index_num}. ID: `{u_id}` ➜ *{bal:,}đ* (Tổng nạp: {t_nap:,}đ)\n"
             index_num += 1
-        if index_num == 1:
-            report_text += "Hệ thống hiện tại chưa ghi nhận dữ liệu người dùng."
         bot.send_message(call.message.chat.id, report_text, parse_mode="Markdown")
         
     elif call.data == "adm_bc":
         if not is_admin: return
-        msg = bot.send_message(call.message.chat.id, "📢 Nhập nội dung văn bản muốn phát sóng diện rộng tới toàn thành viên:")
+        msg = bot.send_message(call.message.chat.id, "📢 Nhập nội dung văn bản muốn phát sóng:")
         bot.register_next_step_handler(msg, process_admin_broadcast)
         
     bot.answer_callback_query(call.id)
@@ -546,10 +541,8 @@ if __name__ == "__main__":
     try: bot.remove_webhook()
     except: pass
     
-    # Khởi động Web Gateway trên tiến trình chạy ngầm độc lập
     gateway_thread = Thread(target=run_web_gateway)
     gateway_thread.daemon = True
     gateway_thread.start()
     
-    logging.info("Bot Telegram đã bắt đầu Polling an toàn...")
     bot.infinity_polling(skip_pending=True)
