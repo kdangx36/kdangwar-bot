@@ -6,7 +6,7 @@ from flask import Flask, request, jsonify
 from threading import Thread
 
 # 1. THÔNG TIN CỦA BẠN ĐÃ ĐƯỢC THAY ĐỔI CHUẨN XÁC
-TOKEN = "ĐIỀN_TOKEN_BOT_CỦA_BẠN_VÀO_ĐÂY"
+TOKEN = "8320265018:AAHPpy71v6eplijZjfWzLkvG0xql_WVeBRg"
 ADMIN_ID = 6074595642
 
 # Cấu hình ví ZaloPay chính chủ của bạn để tạo mã QR tự động
