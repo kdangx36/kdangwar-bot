@@ -70,6 +70,7 @@ def abbank_webhook():
                 if khach_id not in data["users"] or isinstance(data["users"][khach_id], int):
                     data["users"][khach_id] = {"balance": 0, "total_nap": 0, "total_tieu": 0, "don_mua": 0}
                 
+                # CẬP NHẬT TIỀN THẬT 100% CHO KHÁCH HÀNG KHI CHUYỂN KHOẢN THÀNH CÔNG
                 data["users"][khach_id]["balance"] += so_tien
                 data["users"][khach_id]["total_nap"] += so_tien
                 ghi_data(data)
@@ -153,7 +154,6 @@ def xu_ly_giao_dien(message):
         ten_khach_hang = message.from_user.first_name if message.from_user.first_name else "Thành Viên"
 
     if message.text == "👤 Tài Khoản Của Tôi" or message.text == "👤 Tài Khoản":
-        # FIX CẤP BẬC VÀ SỐ DƯ CHO ADMIN TỐI THƯỢNG
         if message.from_user.id == ADMIN_ID:
             so_du_hien_thi = "999,999,999"
             hang_hien_thi = "ADMIN TỐI THƯỢNG"
@@ -321,12 +321,23 @@ def callback_xu_ly(call):
             bot.answer_callback_query(call.id, "❌ Sản phẩm này đã bị người khác mua mất!", show_alert=True)
             return
             
-        if user_info["balance"] < target_acc["price"]:
+        # FIX FIX FIX LỖI SỐ DƯ CHO ADMIN TỐI THƯỢNG
+        is_admin_mua = (call.from_user.id == ADMIN_ID)
+        
+        # Nếu không phải Admin và ví tiền thật không đủ mới chặn
+        if not is_admin_mua and user_info["balance"] < target_acc["price"]:
             bot.answer_callback_query(call.id, "❌ Số dư của bạn không đủ! Vui lòng nạp tiền.", show_alert=True)
         else:
-            data["users"][u_id]["balance"] -= target_acc["price"]
-            data["users"][u_id]["total_tieu"] += target_acc["price"]
-            data["users"][u_id]["don_mua"] += 1
+            # Nếu là khách mua thực tế -> trừ tiền ví thật 100%
+            if not is_admin_mua:
+                data["users"][u_id]["balance"] -= target_acc["price"]
+                data["users"][u_id]["total_tieu"] += target_acc["price"]
+                data["users"][u_id]["don_mua"] += 1
+            else:
+                # Nếu Admin mua test -> lưu log riêng cho tài khoản admin trong database không trừ tiền ảo
+                if u_id not in data["users"] or isinstance(data["users"][u_id], int):
+                    data["users"][u_id] = {"balance": 0, "total_nap": 0, "total_tieu": 0, "don_mua": 0}
+                data["users"][u_id]["don_mua"] += 1
             
             target_acc["status"] = "DaBan"
             ghi_data(data)
