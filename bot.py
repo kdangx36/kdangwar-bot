@@ -3,6 +3,7 @@ import json
 import random
 import logging
 import re
+import time
 from threading import Thread, Lock
 from flask import Flask, request, jsonify
 import telebot
@@ -31,8 +32,11 @@ file_lock = Lock()
 # ================= CORE DATA MANAGEMENT =================
 def init_db():
     if not os.path.exists(DATA_FILE):
-        # Bổ sung dict settings để lưu trạng thái Admin
-        initial_data = {"users": {}, "accounts": [], "settings": {"admin_status": "🟢 Online 24/7"}}
+        initial_data = {
+            "users": {}, 
+            "accounts": [], 
+            "settings": {"admin_status": "🟢 Online 24/7", "last_product_id": 0}
+        }
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(initial_data, f, ensure_ascii=False, indent=4)
 
@@ -45,17 +49,29 @@ def clean_money_value(val) -> int:
     except Exception: return 0
 
 def get_db_raw() -> dict:
+    default_db = {
+        "users": {}, 
+        "accounts": [], 
+        "settings": {"admin_status": "🟢 Online 24/7", "last_product_id": 0}
+    }
     if not os.path.exists(DATA_FILE):
-        return {"users": {}, "accounts": [], "settings": {"admin_status": "🟢 Online 24/7"}}
+        return default_db
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             data.setdefault("users", {})
             data.setdefault("accounts", [])
-            data.setdefault("settings", {"admin_status": "🟢 Online 24/7"}) # Khởi tạo nếu thiếu
+            data.setdefault("settings", {})
+            data["settings"].setdefault("admin_status", "🟢 Online 24/7")
+            
+            # Tự động cập nhật last_product_id cho data cũ
+            if "last_product_id" not in data["settings"]:
+                existing_ids = [acc["id"] for acc in data.get("accounts", [])]
+                data["settings"]["last_product_id"] = max(existing_ids) if existing_ids else 0
+                
             return data
     except Exception:
-        return {"users": {}, "accounts": [], "settings": {"admin_status": "🟢 Online 24/7"}}
+        return default_db
 
 def save_db_raw(data: dict) -> bool:
     try:
@@ -70,13 +86,17 @@ def sync_user_data(data: dict, user_id: str) -> dict:
     user_id = str(user_id)
     if user_id not in data["users"]:
         data["users"][user_id] = {
-            "balance": 0, "total_nap": 0, "total_tieu": 0, "don_mua": 0
+            "balance": 0, "total_nap": 0, "total_tieu": 0, "don_mua": 0, "last_checkin": 0
         }
     else:
         # Auto-clean data tránh bug type
         for key in ["balance", "total_nap", "total_tieu"]:
             data["users"][user_id][key] = clean_money_value(data["users"][user_id].get(key, 0))
         data["users"][user_id]["don_mua"] = int(data["users"][user_id].get("don_mua", 0))
+        # Cập nhật thêm trường last_checkin cho user cũ
+        if "last_checkin" not in data["users"][user_id]:
+            data["users"][user_id]["last_checkin"] = 0
+            
     return data
 
 # ================= KEYBOARD UI BUILDERS =================
@@ -89,6 +109,9 @@ def build_main_keyboard():
     markup.add(
         types.KeyboardButton("👤 Hồ Sơ Cá Nhân"),
         types.KeyboardButton("☎️ Liên Hệ Hỗ Trợ")
+    )
+    markup.add(
+        types.KeyboardButton("🎁 Điểm Danh")
     )
     return markup
 
@@ -162,8 +185,10 @@ def process_admin_add_product(message):
         
         with file_lock:
             db = get_db_raw()
-            existing_ids = [acc["id"] for acc in db["accounts"]]
-            next_id = max(existing_ids) + 1 if existing_ids else 1
+            
+            # Sử dụng ID tịnh tiến từ settings
+            db["settings"]["last_product_id"] += 1
+            next_id = db["settings"]["last_product_id"]
             
             db["accounts"].append({
                 "id": next_id, "name": name, "price": price, "info": info, "status": "ConHang"
@@ -297,7 +322,7 @@ def handle_admin_panel(message):
         types.InlineKeyboardButton("📊 CHECK USER", callback_data="adm_checkall"),
         types.InlineKeyboardButton("📝 HƯỚNG DẪN", callback_data="adm_help")
     )
-    bot.reply_to(message, "⚙️ *TRUNG TÂM QUẢN TRỊ ADMIN (V2.1)*\n━━━━━━━━━━━━━━━━━━━━━━━\nChọn chức năng bên dưới:", reply_markup=markup, parse_mode="Markdown")
+    bot.reply_to(message, "⚙️ *TRUNG TÂM QUẢN TRỊ ADMIN (V2.2)*\n━━━━━━━━━━━━━━━━━━━━━━━\nChọn chức năng bên dưới:", reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: True)
 def handle_text_interface(message):
@@ -307,8 +332,7 @@ def handle_text_interface(message):
     with file_lock:
         db = get_db_raw()
         db = sync_user_data(db, uid)
-        save_db_raw(db)
-    
+        
     user_info = db["users"][uid]
 
     if message.text in ["👤 Hồ Sơ Cá Nhân"]:
@@ -326,9 +350,7 @@ def handle_text_interface(message):
         bot.send_message(message.chat.id, profile_text, parse_mode="Markdown")
 
     elif message.text in ["☎️ Liên Hệ Hỗ Trợ"]:
-        with file_lock:
-            db_data = get_db_raw()
-            status_text = db_data["settings"]["admin_status"]
+        status_text = db["settings"]["admin_status"]
             
         support_text = (
             f"👨‍💻 *THÔNG TIN LIÊN HỆ ADMIN*\n"
@@ -359,6 +381,46 @@ def handle_text_interface(message):
             bot.send_message(message.chat.id, "🛍️ *TRUNG TÂM MUA SẮM*\n━━━━━━━━━━━━━━━━━━━━━━━\nDanh mục sản phẩm hiện đang có sẵn:", reply_markup=markup, parse_mode="Markdown")
         else:
             bot.send_message(message.chat.id, "❌ *Rất tiếc! Hiện tại tất cả sản phẩm đều đã cháy hàng, vui lòng quay lại sau!*", parse_mode="Markdown")
+
+    elif message.text in ["🎁 Điểm Danh"]:
+        current_time = int(time.time())
+        last_checkin = user_info.get("last_checkin", 0)
+        
+        # 86400 giây = 24 giờ
+        if current_time - last_checkin >= 86400:
+            reward = random.randint(36, 500)
+            
+            with file_lock:
+                db = get_db_raw()
+                db = sync_user_data(db, uid)
+                db["users"][uid]["balance"] += reward
+                db["users"][uid]["last_checkin"] = current_time
+                save_db_raw(db)
+                
+            bot.send_message(
+                message.chat.id, 
+                f"🎉 *ĐIỂM DANH THÀNH CÔNG*\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🎁 Chúc mừng bạn nhận được: *+{reward} VNĐ*\n"
+                f"💵 Số dư khả dụng hiện tại: *{db['users'][uid]['balance']:,} VNĐ*\n\n"
+                f"⏳ Hãy quay lại sau 24h nữa nhé!", 
+                parse_mode="Markdown"
+            )
+        else:
+            time_left = 86400 - (current_time - last_checkin)
+            hours = time_left // 3600
+            minutes = (time_left % 3600) // 60
+            bot.send_message(
+                message.chat.id, 
+                f"⏳ *BẠN ĐÃ ĐIỂM DANH RỒI*\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Vui lòng quay lại sau: *{hours} giờ {minutes} phút* nữa để nhận quà tiếp nhé!", 
+                parse_mode="Markdown"
+            )
+            
+    # Lưu lại DB sau khi xử lý text interface ở cuối nếu cần (đã lưu ở trên cho phần điểm danh)
+    with file_lock:
+        save_db_raw(db)
 
 def process_deposit_input(message):
     try:
