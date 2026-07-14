@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify
 from threading import Thread
 
 # ================= CONFIG THÔNG TIN CHÍNH CHỦ CỦA BẠN =================
-TOKEN = "ĐIỀN_TOKEN_BOT_CỦA_BẠN_VÀO_ĐÂY"
+TOKEN = "8320265018:AAHPpy71v6eplijZjfWzLkvG0xql_WVeBRg"
 ADMIN_ID = 6074595642
 
 # Cấu hình chuẩn định danh VietQR của ngân hàng ABBank NGUYEN KHOA DANG
