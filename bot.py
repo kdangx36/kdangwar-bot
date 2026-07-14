@@ -146,13 +146,15 @@ def xu_ly_giao_dien(message):
         ghi_data(data)
         
     user_info = data["users"][u_id]
-    username = f"@{message.from_user.username}" if message.from_user.username else "Chưa thiết lập"
+    
+    # Lấy tên khách hàng chuẩn chỉnh
+    ten_khach_hang = message.from_user.first_name if message.from_user.first_name else "Thành Viên VIP"
 
     if message.text == "👤 Tài Khoản Của Tôi" or message.text == "👤 Tài Khoản":
         van_ban = (
             f"👤 *THÔNG TIN TÀI KHOẢN KHÁCH HÀNG*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👑 *Tên khách hàng:* {message.from_user.first_name}\n"
+            f"👑 *Tên khách hàng:* {ten_khach_hang}\n"
             f"🆔 *ID cá nhân:* `{u_id}`\n"
             f"💰 *Số dư khả dụng:* {user_info.get('balance', 0):,} VNĐ\n"
             f"✨ *Cấp bậc:* Thành Viên Đồng\n"
@@ -365,7 +367,6 @@ def auto_ping():
     time.sleep(20)  # Chờ server Render khởi động ổn định 20 giây đầu
     while True:
         try:
-            # Bot tự truy cập vào link web của chính nó để ép Render giữ luồng chạy liên tục
             requests.get("https://kdang-bot.onrender.com")
             print("🚀 [Auto-Ping] Đã đánh thức hệ thống Shop Kdangx thành công!")
         except Exception as e:
@@ -373,7 +374,6 @@ def auto_ping():
         time.sleep(240)  # Cứ 4 phút (240 giây) tự động lặp lại 1 lần liên tục
 
 def run_api():
-    # Khởi chạy luồng phụ Auto-Ping song song với Flask Server
     ping_thread = Thread(target=auto_ping)
     ping_thread.daemon = True
     ping_thread.start()
@@ -386,3 +386,4 @@ if __name__ == "__main__":
     t = Thread(target=run_api)
     t.start()
     bot.infinity_polling(skip_pending=True)
+                  
