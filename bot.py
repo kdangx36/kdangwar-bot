@@ -35,13 +35,11 @@ def init_db():
             json.dump(initial_data, f, ensure_ascii=False, indent=4)
 
 def clean_money_value(val) -> int:
-    """Hàm cốt lõi: Làm sạch mọi loại chuỗi số (xóa dấu phẩy, khoảng trắng) trước khi ép kiểu int"""
     if val is None:
         return 0
     if isinstance(val, (int, float)):
         return int(val)
     try:
-        # Lọc sạch chỉ giữ lại các ký tự số
         cleaned = re.sub(r'[^\d]', '', str(val))
         return int(cleaned) if cleaned else 0
     except Exception:
@@ -79,7 +77,6 @@ def sync_user_data(data: dict, user_id: str) -> dict:
             "don_mua": 0
         }
     else:
-        # Ép kiểu an toàn tuyệt đối qua hàm lọc chuỗi clean_money_value
         data["users"][user_id]["balance"] = clean_money_value(data["users"][user_id].get("balance", 0))
         data["users"][user_id]["total_nap"] = clean_money_value(data["users"][user_id].get("total_nap", 0))
         data["users"][user_id]["total_tieu"] = clean_money_value(data["users"][user_id].get("total_tieu", 0))
@@ -259,6 +256,13 @@ def process_admin_broadcast(message):
 # ================= TELEGRAM HANDLERS =================
 @bot.message_handler(commands=['start'])
 def handle_start_command(message):
+    # CHẶN CHAT NHÓM ĐỐI VỚI LỆNH START
+    if message.chat.type != 'private':
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("💬 Chat Riêng Với Bot", url=f"t.me/{bot.get_me().username}?start=shop"))
+        bot.reply_to(message, "❌ *Hệ thống mua bán chỉ hoạt động khi nhắn tin riêng (Private Chat) với Bot để bảo mật tài khoản!*", reply_markup=markup, parse_mode="Markdown")
+        return
+
     uid = str(message.from_user.id)
     db = read_db()
     db = sync_user_data(db, uid)
@@ -277,6 +281,16 @@ def handle_start_command(message):
 
 @bot.message_handler(func=lambda msg: True)
 def handle_text_interface(message):
+    # CHẶN TOÀN BỘ CÁC PHÍM CHỨC NĂNG NẾU NGƯỜI DÙNG BẤM TRONG GROUP CHAT
+    if message.chat.type != 'private':
+        if message.text == "🛠️ Admin Panel" and message.from_user.id == ADMIN_ID:
+            pass # Cho phép admin mở panel trong group nếu cần
+        else:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("💬 Nhắn Tin Riêng Với Bot", url=f"t.me/{bot.get_me().username}?start=shop"))
+            bot.reply_to(message, "❌ *Vui lòng bấm nút bên dưới để chat riêng với bot. Hệ thống không hỗ trợ giao dịch công khai trên Nhóm chat!*", reply_markup=markup, parse_mode="Markdown")
+            return
+
     uid = str(message.from_user.id)
     db = read_db()
     db = sync_user_data(db, uid)
@@ -288,7 +302,6 @@ def handle_text_interface(message):
 
     if message.text in ["👤 Tài Khoản Của Tôi", "👤 Tài Khoản"]:
         role = "ADMIN TỐI THƯỢNG" if is_admin else "USER"
-        # Đảm bảo hiển thị số dư sạch định dạng số nguyên
         current_bal = clean_money_value(user_info['balance'])
         total_t = clean_money_value(user_info['total_tieu'])
         total_n = clean_money_value(user_info['total_nap'])
@@ -377,6 +390,11 @@ def process_deposit_input(message):
 # ================= CALLBACK INTERACTION RESPONSES =================
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
+    # CHẶN CALLBACK KHÔNG CHO BẤM NÚT MUA BÁN TRONG NHÓM CHAT CHỐNG BUG 0Đ
+    if call.message.chat.type != 'private':
+        bot.answer_callback_query(call.id, "❌ Bạn không thể mua hàng trực tiếp trên nhóm chat công khai. Hãy chat riêng với bot!", show_alert=True)
+        return
+
     uid_click = str(call.from_user.id)
     db = read_db()
     is_admin = (call.from_user.id == ADMIN_ID)
@@ -445,14 +463,12 @@ def handle_callbacks(call):
 
         db = sync_user_data(db, uid_click)
         
-        # ÉP KIỂU SẠCH SẼ ĐỂ CHỐNG BUG SO SÁNH 25K < 25K
         wallet_balance = clean_money_value(db["users"][uid_click]["balance"])
         product_price = clean_money_value(product["price"])
         
         if wallet_balance < product_price:
             bot.answer_callback_query(call.id, f"❌ Số dư của bạn không đủ điều kiện thanh toán! Hiện có: {wallet_balance:,}đ, Giá: {product_price:,}đ. Vui lòng nạp thêm tiền.", show_alert=True)
         else:
-            # TRỪ TIỀN CHUẨN XÁC ĐỐI TƯỢNG SỐ NGUYÊN
             db["users"][uid_click]["balance"] = wallet_balance - product_price
             db["users"][uid_click]["total_tieu"] += product_price
             db["users"][uid_click]["don_mua"] += 1
