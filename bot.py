@@ -3,6 +3,8 @@ from telebot import types
 import json
 import os
 import random
+import time
+import requests
 from flask import Flask, request, jsonify
 from threading import Thread
 
@@ -179,7 +181,7 @@ def xu_ly_giao_dien(message):
                 markup.add(types.InlineKeyboardButton(f"📁 {ten_kho} • [Số lượng: {so_luong}]", callback_data=f"open_kho_{ten_kho}"))
                 
             van_ban_kho = (
-                f"🛍️ *DANH MỤC KHO HÀNG SHOP KDRANGX*\n"
+                f"🛍️ *DANH MỤC KHO HÀNG SHOP KDANGX*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"✨ Vui lòng chọn loại sản phẩm bạn muốn mua bên dưới:\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━"
@@ -286,7 +288,7 @@ def callback_xu_ly(call):
             for ten_kho, so_luong in kho_hang.items():
                 markup.add(types.InlineKeyboardButton(f"📁 {ten_kho} • [Số lượng: {so_luong}]", callback_data=f"open_kho_{ten_kho}"))
             van_ban_kho = (
-                f"🛍️ *DANH MỤC KHO HÀNG SHOP KDRANGX*\n"
+                f"🛍️ *DANH MỤC KHO HÀNG SHOP KDANGX*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"✨ Vui lòng chọn loại sản phẩm bạn muốn mua bên dưới:\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━"
@@ -358,7 +360,24 @@ def callback_xu_ly(call):
         bot.send_message(call.message.chat.id, f"🗑 Đã xóa hoàn toàn sản phẩm mã #{acc_id}.")
         bot.answer_callback_query(call.id)
 
+# ================= HÀM TỰ ĐỘNG PING CHỐNG NGỦ ĐÔNG =================
+def auto_ping():
+    time.sleep(20)  # Chờ server Render khởi động ổn định 20 giây đầu
+    while True:
+        try:
+            # Bot tự truy cập vào link web của chính nó để ép Render giữ luồng chạy liên tục
+            requests.get("https://kdang-bot.onrender.com")
+            print("🚀 [Auto-Ping] Đã đánh thức hệ thống Shop Kdangx thành công!")
+        except Exception as e:
+            print("🚨 [Auto-Ping] Lỗi kết nối tự gọi:", str(e))
+        time.sleep(240)  # Cứ 4 phút (240 giây) tự động lặp lại 1 lần liên tục
+
 def run_api():
+    # Khởi chạy luồng phụ Auto-Ping song song với Flask Server
+    ping_thread = Thread(target=auto_ping)
+    ping_thread.daemon = True
+    ping_thread.start()
+    
     app.run(host="0.0.0.0", port=10000)
 
 if __name__ == "__main__":
