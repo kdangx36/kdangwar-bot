@@ -307,10 +307,11 @@ def run_api():
     app.run(host="0.0.0.0", port=10000)
 
 if __name__ == "__main__":
-    # Tự động dọn dẹp webhook cũ nếu bị kẹt dòng lệnh polling trước
+    # Tự động gỡ bỏ webhook cũ tránh xung đột 409 kẹt luồng
     try: bot.remove_webhook()
     except: pass
     
     t = Thread(target=run_api)
     t.start()
+    # Thêm skip_pending=True để bỏ qua tin nhắn rác lúc bot nghẽn, giúp bot phản hồi ngay lập tức
     bot.infinity_polling(skip_pending=True)
