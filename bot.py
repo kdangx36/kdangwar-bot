@@ -120,9 +120,10 @@ def send_welcome(message):
         data["users"][u_id] = {"balance": 0, "total_nap": 0, "total_tieu": 0, "don_mua": 0}
         ghi_data(data)
         
-    ten_khach = message.from_user.first_name if message.from_user.first_name else message.from_user.username
-    if not ten_khach:
-        ten_khach = "Thành Viên VIP"
+    if message.from_user.username:
+        ten_khach = f"@{message.from_user.username}"
+    else:
+        ten_khach = message.from_user.first_name if message.from_user.first_name else "Thành Viên"
     
     van_ban = (
         f"👑 *HỆ THỐNG SHOP KDANGX VIP* 👑\n"
@@ -146,26 +147,31 @@ def xu_ly_giao_dien(message):
         
     user_info = data["users"][u_id]
     
-    ten_khach_hang = message.from_user.first_name if message.from_user.first_name else message.from_user.username
-    if not ten_khach_hang:
-        ten_khach_hang = "Thành Viên VIP"
+    if message.from_user.username:
+        ten_khach_hang = f"@{message.from_user.username}"
+    else:
+        ten_khach_hang = message.from_user.first_name if message.from_user.first_name else "Thành Viên"
 
     if message.text == "👤 Tài Khoản Của Tôi" or message.text == "👤 Tài Khoản":
-        # THÊM SỐ DƯ CHO ADMIN 999,999,999
+        # FIX CẤP BẬC VÀ SỐ DƯ CHO ADMIN TỐI THƯỢNG
         if message.from_user.id == ADMIN_ID:
             so_du_hien_thi = "999,999,999"
+            hang_hien_thi = "ADMIN TỐI THƯỢNG"
         else:
             so_du_hien_thi = f"{user_info.get('balance', 0):,}"
+            hang_hien_thi = "USER"
 
         van_ban = (
-            f"👤 *THÔNG TIN TÀI KHOẢN KHÁCH HÀNG*\n"
+            f"👤 *TÀI KHOẢN CỦA BẠN*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"👑 *Tên khách hàng:* {ten_khach_hang}\n"
-            f"🆔 *ID cá nhân:* `{u_id}`\n"
-            f"💰 *Số dư khả dụng:* {so_du_hien_thi} VNĐ\n"
-            f"✨ *Cấp bậc:* Thành Viên Đồng\n"
+            f"🆔 *ID:* `{u_id}`\n"
+            f"👤 *Tên:* {ten_khach_hang}\n"
+            f"⭐ *Hạng:* {hang_hien_thi}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"💸 *Đã tiêu:* {user_info.get('total_tieu', 0):,}đ | 🛒 *Đơn mua:* {user_info.get('don_mua', 0)}\n\n"
+            f"💰 *Số dư:* {so_du_hien_thi}đ\n"
+            f"💸 *Đã tiêu:* {user_info.get('total_tieu', 0):,}đ\n"
+            f"💳 *Tổng nạp:* {user_info.get('total_nap', 0):,}đ\n"
+            f"🛒 *Đơn mua:* {user_info.get('don_mua', 0)}\n\n"
             f"🆘 *Hỗ trợ:* @kdangx"
         )
         bot.send_message(message.chat.id, van_ban, parse_mode="Markdown")
