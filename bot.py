@@ -31,7 +31,8 @@ file_lock = Lock()
 # ================= CORE DATA MANAGEMENT =================
 def init_db():
     if not os.path.exists(DATA_FILE):
-        initial_data = {"users": {}, "accounts": []}
+        # Bổ sung dict settings để lưu trạng thái Admin
+        initial_data = {"users": {}, "accounts": [], "settings": {"admin_status": "🟢 Online 24/7"}}
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(initial_data, f, ensure_ascii=False, indent=4)
 
@@ -45,15 +46,16 @@ def clean_money_value(val) -> int:
 
 def get_db_raw() -> dict:
     if not os.path.exists(DATA_FILE):
-        return {"users": {}, "accounts": []}
+        return {"users": {}, "accounts": [], "settings": {"admin_status": "🟢 Online 24/7"}}
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             data.setdefault("users", {})
             data.setdefault("accounts", [])
+            data.setdefault("settings", {"admin_status": "🟢 Online 24/7"}) # Khởi tạo nếu thiếu
             return data
     except Exception:
-        return {"users": {}, "accounts": []}
+        return {"users": {}, "accounts": [], "settings": {"admin_status": "🟢 Online 24/7"}}
 
 def save_db_raw(data: dict) -> bool:
     try:
@@ -217,6 +219,37 @@ def process_admin_deduct(message):
     except Exception:
         bot.reply_to(message, "❌ Mẫu chuẩn: `ID Khách | Số tiền`\n*(Ví dụ: `123456789 | 50000`)*", parse_mode="Markdown")
 
+def process_admin_status(message):
+    if message.from_user.id != ADMIN_ID: return
+    new_status = message.text.strip()
+    with file_lock:
+        db = get_db_raw()
+        db["settings"]["admin_status"] = new_status
+        save_db_raw(db)
+    bot.reply_to(message, f"✅ Đã cập nhật trạng thái Admin thành:\n*{new_status}*", parse_mode="Markdown")
+
+def process_admin_broadcast(message):
+    if message.from_user.id != ADMIN_ID: return
+    text_to_send = message.text
+    bot.reply_to(message, "⏳ Đang tiến hành gửi thông báo đến toàn bộ hệ thống...")
+    
+    with file_lock:
+        db = get_db_raw()
+        users = list(db["users"].keys())
+        
+    success_count = 0
+    for u_id in users:
+        # Bỏ qua không gửi cho chính Admin
+        if str(u_id) == str(ADMIN_ID): 
+            continue
+        try:
+            bot.send_message(u_id, f"📢 *THÔNG BÁO TỪ HỆ THỐNG*\n━━━━━━━━━━━━━━━━━━━━━━━\n{text_to_send}", parse_mode="Markdown")
+            success_count += 1
+        except Exception:
+            pass # Bỏ qua nếu user chặn bot
+            
+    bot.send_message(message.chat.id, f"✅ *Hoàn tất quá trình gửi thông báo!*\nĐã gửi thành công: {success_count} người dùng.", parse_mode="Markdown")
+
 # ================= TELEGRAM HANDLERS =================
 @bot.message_handler(commands=['start'])
 def handle_start_command(message):
@@ -257,10 +290,14 @@ def handle_admin_panel(message):
         types.InlineKeyboardButton("📉 TRỪ TIỀN", callback_data="adm_minus")
     )
     markup.add(
+        types.InlineKeyboardButton("🔄 ĐỔI TRẠNG THÁI", callback_data="adm_status"),
+        types.InlineKeyboardButton("📢 THÔNG BÁO TẤT CẢ", callback_data="adm_broadcast")
+    )
+    markup.add(
         types.InlineKeyboardButton("📊 CHECK USER", callback_data="adm_checkall"),
         types.InlineKeyboardButton("📝 HƯỚNG DẪN", callback_data="adm_help")
     )
-    bot.reply_to(message, "⚙️ *TRUNG TÂM QUẢN TRỊ ADMIN (V2.0)*\n━━━━━━━━━━━━━━━━━━━━━━━\nChọn chức năng bên dưới:", reply_markup=markup, parse_mode="Markdown")
+    bot.reply_to(message, "⚙️ *TRUNG TÂM QUẢN TRỊ ADMIN (V2.1)*\n━━━━━━━━━━━━━━━━━━━━━━━\nChọn chức năng bên dưới:", reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda msg: True)
 def handle_text_interface(message):
@@ -289,11 +326,15 @@ def handle_text_interface(message):
         bot.send_message(message.chat.id, profile_text, parse_mode="Markdown")
 
     elif message.text in ["☎️ Liên Hệ Hỗ Trợ"]:
+        with file_lock:
+            db_data = get_db_raw()
+            status_text = db_data["settings"]["admin_status"]
+            
         support_text = (
             f"👨‍💻 *THÔNG TIN LIÊN HỆ ADMIN*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"👑 Chủ Shop: [@kdangx](https://t.me/kdangx)\n"
-            f"🟢 Trạng thái: *Hệ thống Online 24/7*\n\n"
+            f"🌐 Trạng thái Admin: *{status_text}*\n\n"
             f"📝 *Lưu ý:*\n"
             f"- Mọi giao dịch nạp tiền & xuất hàng đều tự động 100%.\n"
             f"- Nếu gặp lỗi đơn hàng, vui lòng copy mã ID của bạn (`{uid}`) và gửi cho Admin để được hỗ trợ nhanh nhất!\n"
@@ -373,7 +414,6 @@ def handle_callbacks(call):
             bot.edit_message_text(f"📦 *DANH SÁCH: {cat_name}*\n━━━━━━━━━━━━━━━━━━━━━━━\nBấm chọn vào mã SP để xem chi tiết:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
         else:
             bot.answer_callback_query(call.id, "❌ Chậm chân rồi, sản phẩm này vừa bị người khác mua mất!", show_alert=True)
-            # Quay lại home tự động
             handle_callbacks(types.CallbackQuery(call.id, call.from_user, call.data, call.chat_instance, call.message, "nav_home"))
 
     elif call.data.startswith("target_sp_"):
@@ -514,6 +554,16 @@ def handle_callbacks(call):
         msg = bot.send_message(call.message.chat.id, "📉 *TRỪ TIỀN*\nVui lòng gửi theo cú pháp:\n`ID Khách | Số tiền`\n*(Ví dụ: `1234567 | 50000`)*", parse_mode="Markdown")
         bot.register_next_step_handler(msg, process_admin_deduct)
 
+    elif call.data == "adm_status":
+        if not is_admin: return
+        msg = bot.send_message(call.message.chat.id, "🔄 *CẬP NHẬT TRẠNG THÁI ADMIN*\nVui lòng nhập trạng thái mới (VD: `🔴 Offline` hoặc `🟢 Online`):", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_admin_status)
+
+    elif call.data == "adm_broadcast":
+        if not is_admin: return
+        msg = bot.send_message(call.message.chat.id, "📢 *THÔNG BÁO TOÀN SHOP*\nVui lòng nhập nội dung muốn gửi đến tất cả người dùng:", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_admin_broadcast)
+
     elif call.data == "adm_checkall":
         if not is_admin: return
         with file_lock: db = get_db_raw()
@@ -538,7 +588,8 @@ def handle_callbacks(call):
             "**1. THÊM SP:** Chọn nút thêm và gõ theo cấu trúc:\n`Giá | Tên SP | Thông tin SP`\n"
             "*(Bạn có thể gõ bao nhiêu dấu `|` ở phần thông tin cũng được, bot tự hiểu)*\n\n"
             "**2. CỘNG/TRỪ TIỀN:** Gõ ID khách và số tiền cách nhau bởi dấu `|`.\nVí dụ: `123456789 | 50000`\n\n"
-            "**3. QUẢN LÝ:** Mọi dữ liệu an toàn trong file `shop_data.json`."
+            "**3. ĐỔI TRẠNG THÁI:** Tuỳ chỉnh chữ hiển thị tại mục Liên Hệ Hỗ Trợ.\n\n"
+            "**4. QUẢN LÝ:** Mọi dữ liệu an toàn trong file `shop_data.json`."
         )
         bot.send_message(call.message.chat.id, help_text, parse_mode="Markdown")
         
