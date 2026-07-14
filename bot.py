@@ -24,8 +24,8 @@ if not os.path.exists(DATA_FILE):
     initial_data = {
         "users": {},
         "accounts": [
-            {"id": 1, "price": 0, "info": "TK: dangnguyen123 | MK: dang123456", "status": "ConHang"},
-            {"id": 2, "price": 50000, "info": "TK: top1ff@gmail.com | MK: freefire2026", "status": "ConHang"}
+            {"id": 1, "price": 0, "info": "TK: dang123@gmail.com | MK: dang123456", "status": "ConHang"},
+            {"id": 2, "price": 0, "info": "TK: top1ff@gmail.com | MK: freefire2026", "status": "ConHang"}
         ]
     }
     with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -149,7 +149,7 @@ def xu_ly_giao_dien(message):
         for acc in data["accounts"]:
             if acc["status"] == "ConHang":
                 co_hang = True
-                markup.add(types.InlineKeyboardButton(f"🎟️ ACC FREEFIRE #{acc['id']} — 💰 Giá: {acc['price']:,}đ", callback_data=f"buy_{acc['id']}"))
+                markup.add(types.InlineKeyboardButton(f"🎟️ ACC CLONE LV5 #{acc['id']} — 💰 Giá: {acc['price']:,}đ", callback_data=f"buy_{acc['id']}"))
         
         if co_hang:
             van_ban_kho = "🛒 *DANH SÁCH SẢN PHẨM ACC ĐANG SẴN CÓ TRONG KHO:* \n\n" \
