@@ -3,8 +3,6 @@ from telebot import types
 import json
 import os
 import random
-import time
-import requests
 from flask import Flask, request, jsonify
 from threading import Thread
 
@@ -95,7 +93,6 @@ def xử_lý_thêm_acc(message):
         gia = int(chuoi[0].strip())
         ten_sp = chuoi[1].strip()
         
-        # Lấy toàn bộ phần thông tin còn lại đứng sau dấu | thứ hai (Giữ nguyên mật khẩu, không bị mất)
         thong_tin = "|".join(chuoi[2:]).strip()
         
         data = doc_data()
@@ -123,7 +120,9 @@ def send_welcome(message):
         data["users"][u_id] = {"balance": 0, "total_nap": 0, "total_tieu": 0, "don_mua": 0}
         ghi_data(data)
         
-    ten_khach = message.from_user.first_name if message.from_user.first_name else "Thành Viên VIP"
+    ten_khach = message.from_user.first_name if message.from_user.first_name else message.from_user.username
+    if not ten_khach:
+        ten_khach = "Thành Viên VIP"
     
     van_ban = (
         f"👑 *HỆ THỐNG SHOP KDANGX VIP* 👑\n"
@@ -147,16 +146,23 @@ def xu_ly_giao_dien(message):
         
     user_info = data["users"][u_id]
     
-    # Lấy tên khách hàng chuẩn chỉnh
-    ten_khach_hang = message.from_user.first_name if message.from_user.first_name else "Thành Viên VIP"
+    ten_khach_hang = message.from_user.first_name if message.from_user.first_name else message.from_user.username
+    if not ten_khach_hang:
+        ten_khach_hang = "Thành Viên VIP"
 
     if message.text == "👤 Tài Khoản Của Tôi" or message.text == "👤 Tài Khoản":
+        # THÊM SỐ DƯ CHO ADMIN 999,999,999
+        if message.from_user.id == ADMIN_ID:
+            so_du_hien_thi = "999,999,999"
+        else:
+            so_du_hien_thi = f"{user_info.get('balance', 0):,}"
+
         van_ban = (
             f"👤 *THÔNG TIN TÀI KHOẢN KHÁCH HÀNG*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"👑 *Tên khách hàng:* {ten_khach_hang}\n"
             f"🆔 *ID cá nhân:* `{u_id}`\n"
-            f"💰 *Số dư khả dụng:* {user_info.get('balance', 0):,} VNĐ\n"
+            f"💰 *Số dư khả dụng:* {so_du_hien_thi} VNĐ\n"
             f"✨ *Cấp bậc:* Thành Viên Đồng\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"💸 *Đã tiêu:* {user_info.get('total_tieu', 0):,}đ | 🛒 *Đơn mua:* {user_info.get('don_mua', 0)}\n\n"
@@ -171,7 +177,6 @@ def xu_ly_giao_dien(message):
     elif message.text == "🛍️ Mua Key/Acc":
         markup = types.InlineKeyboardMarkup(row_width=1)
         
-        # Nhóm các acc cùng tên lại và đếm số lượng "ConHang"
         kho_hang = {}
         for acc in data["accounts"]:
             if acc["status"] == "ConHang":
@@ -202,6 +207,10 @@ def xu_ly_giao_dien(message):
         bot.send_message(message.chat.id, "🛠 *BẢNG ĐIỀU KHIỂN ADMIN QUẢN LÝ SHOP*", reply_markup=markup, parse_mode="Markdown")
 
 def xu_ly_nhap_tien_nap(message):
+    if message.text in ["🛍️ Mua Key/Acc", "💳 Nạp Tiền Shop", "👤 Tài Khoản Của Tôi", "🛠️ Admin Panel"]:
+        xu_ly_giao_dien(message)
+        return
+        
     try:
         so_tien_nap = int(message.text.strip())
         if so_tien_nap < 1000:
@@ -237,7 +246,6 @@ def callback_xu_ly(call):
     u_id = str(call.from_user.id)
     data = doc_data()
 
-    # Mở kho hàng gom nhóm dựa theo Tên trùng nhau
     if call.data.startswith("open_kho_"):
         ten_kho = call.data.replace("open_kho_", "")
         markup = types.InlineKeyboardMarkup(row_width=1)
@@ -362,22 +370,7 @@ def callback_xu_ly(call):
         bot.send_message(call.message.chat.id, f"🗑 Đã xóa hoàn toàn sản phẩm mã #{acc_id}.")
         bot.answer_callback_query(call.id)
 
-# ================= HÀM TỰ ĐỘNG PING CHỐNG NGỦ ĐÔNG =================
-def auto_ping():
-    time.sleep(20)  # Chờ server Render khởi động ổn định 20 giây đầu
-    while True:
-        try:
-            requests.get("https://kdang-bot.onrender.com")
-            print("🚀 [Auto-Ping] Đã đánh thức hệ thống Shop Kdangx thành công!")
-        except Exception as e:
-            print("🚨 [Auto-Ping] Lỗi kết nối tự gọi:", str(e))
-        time.sleep(240)  # Cứ 4 phút (240 giây) tự động lặp lại 1 lần liên tục
-
 def run_api():
-    ping_thread = Thread(target=auto_ping)
-    ping_thread.daemon = True
-    ping_thread.start()
-    
     app.run(host="0.0.0.0", port=10000)
 
 if __name__ == "__main__":
@@ -386,4 +379,3 @@ if __name__ == "__main__":
     t = Thread(target=run_api)
     t.start()
     bot.infinity_polling(skip_pending=True)
-                  
