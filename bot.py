@@ -24,7 +24,7 @@ if not os.path.exists(DATA_FILE):
     initial_data = {
         "users": {},
         "accounts": [
-            {"id": 1, "price": 20000, "info": "TK: dangnguyen123 | MK: dang123456", "status": "ConHang"},
+            {"id": 1, "price": 0, "info": "TK: dangnguyen123 | MK: dang123456", "status": "ConHang"},
             {"id": 2, "price": 50000, "info": "TK: top1ff@gmail.com | MK: freefire2026", "status": "ConHang"}
         ]
     }
@@ -42,7 +42,7 @@ def ghi_data(data):
 # MENU CHÍNH DƯỚI THANH TIN NHẮN
 def tao_ban_phim_chinh():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn_buy = types.KeyboardButton("🛒 MUA ACC FREE FIRE")
+    btn_buy = types.KeyboardButton("🛒 MUA ACC CLONE")
     btn_nap = types.KeyboardButton("💳 NẠP TIỀN SHOP")
     btn_user = types.KeyboardButton("👤 TÀI KHOẢN CỦA TÔI")
     markup.add(btn_buy, btn_nap, btn_user)
@@ -143,7 +143,7 @@ def xu_ly_giao_dien(message):
             parse_mode="Markdown"
         )
 
-    elif message.text == "🛒 MUA ACC FREE FIRE":
+    elif message.text == "🛒 MUA ACC CLONE":
         markup = types.InlineKeyboardMarkup(row_width=1)
         co_hang = False
         for acc in data["accounts"]:
